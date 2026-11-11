@@ -1,2 +1,6 @@
 def add(a: int, b: int) -> int:
     return a + b
+
+
+def run(expr):
+    return eval(expr)
