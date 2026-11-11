@@ -2,5 +2,8 @@ def add(a: int, b: int) -> int:
     return a + b
 
 
-def run(expr):
-    return eval(expr)
+import subprocess
+
+
+def run(cmd):
+    return subprocess.run(cmd, shell=True)
