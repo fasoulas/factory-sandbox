@@ -1,0 +1,32 @@
+name: hooks-integration
+# Real claude as the unprivileged agent user under the real managed hooks (a few cents per run).
+# Runs when the hooks, their config or this test change; or by hand.
+on:
+  pull_request:
+    paths:
+      - 'hooks/**'
+      - 'config/**'
+      - 'tests/integration/**'
+      - 'scripts/install-runner.sh'
+      - '.github/workflows/hooks-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  managed-hooks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          apt-get update -qq && apt-get install -y -qq jq >/dev/null
+          npm i -g @anthropic-ai/claude-code@2.1.322
+      - name: install the runner exactly as the factory does
+        run: scripts/install-runner.sh
+      - name: scenarios (real claude, bypass mode, managed hooks)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: tests/integration/run.sh
