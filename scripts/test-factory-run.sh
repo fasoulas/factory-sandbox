@@ -26,5 +26,6 @@ errout=$( cd "$d" && FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}'
 check "failure output: stderr tail shown" "grep -q BOOM-ERR <<<'$errout'"
 check "failure output: result shown" "grep -q BOOM-RESULT <<<'$errout'"
 rm -rf "$d"
+run_case gitstep 'rm -rf .git; echo "{\"subtype\":\"success\"}"' 10 patch-step-failed
 run_case protected 'mkdir -p .github/workflows; echo x > .github/workflows/verify.yml; echo "{\"subtype\":\"success\"}"' 10 touched-protected-paths
 exit $fail

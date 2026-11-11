@@ -80,8 +80,10 @@ $body"
     >"$OUT" 2>"$OUTDIR/err" )
 rc=$?
 # agent steps are over: no leftover agent process may touch anything while root reads its output
-( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent sh -c "git diff --cached --binary --no-renames > '$OUTDIR/patch'" ) >/dev/null 2>&1
+gitstep_ok=1
+( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent sh -c "git diff --cached --binary --no-renames > '$OUTDIR/patch'" ) >"$OUTDIR/gitlog" 2>&1 || gitstep_ok=0
 kill_agent
+if [ "$gitstep_ok" -eq 0 ]; then { echo "--- agent git step failed:"; tail -n 20 "$OUTDIR/gitlog"; } >&2; log_and_exit "patch-step-failed"; fi
 
 [ "$rc" -eq 124 ] && log_and_exit "timeout"
 sub=$(jq -r '.subtype // "none"' "$OUT" 2>/dev/null || echo none)
