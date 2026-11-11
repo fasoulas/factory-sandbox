@@ -2,3 +2,4 @@
 factory-runs.jsonl
 __pycache__/
 .coverage
+.pytest_cache/
