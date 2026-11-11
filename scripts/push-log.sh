@@ -4,7 +4,7 @@
 set -euo pipefail
 LOG=${FACTORY_LOG:-factory-runs.jsonl}
 [ -s "$LOG" ] || { echo "no log line to push"; exit 0; }
-url=https://github.com/$GITHUB_REPOSITORY.git
+url=${FACTORY_LOGS_URL:-https://github.com/$GITHUB_REPOSITORY.git}   # override: tests push to a local bare repo
 auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
 g() { git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" "$@"; }
 tmp=$(mktemp -d)
