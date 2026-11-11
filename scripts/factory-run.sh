@@ -82,7 +82,9 @@ rc=$?
 # agent steps are over: no leftover agent process may touch anything while root reads its output
 # agent-side git: patch comes back on stdout (root-opened file), no agent-writable path is ever written/read by root
 gitstep_ok=1
-( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent git diff --cached --binary --no-renames ) \
+# lock file: never in the patch. NOT a ':!' pathspec: naming a gitignored path makes `git add` exit non-zero (runs 43107136642, 43108374953)
+( cd "$WS" && as_agent git add -A && as_agent git rm -q --cached --ignore-unmatch -- .factory-running \
+  && as_agent git diff --cached --binary --no-renames ) \
   >"$OUTDIR/patch" 2>"$OUTDIR/gitlog" || gitstep_ok=0
 # agent steps are over: no leftover agent process may touch anything while root reads its output
 kill_agent
