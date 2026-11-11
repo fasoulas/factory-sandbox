@@ -25,8 +25,8 @@ OUTDIR=$(mktemp -d); WORK=$(mktemp -d)
 OUT=$OUTDIR/out.json
 start=$(date +%s)
 
-# agent must be able to write its output, nothing else of ours
-[ -n "$AGENT_USER" ] && chown "$AGENT_USER" "$OUTDIR"
+# OUTDIR stays root-owned and root-only: the agent never gets a path there, so it cannot plant a symlink
+# that root would follow. Root opens every output file; the agent writes through inherited fds.
 touch "$LOCK"
 trap 'rm -f "$LOCK"; rm -rf "$OUTDIR" "$WORK"' EXIT   # lock must go on every exit path
 trap 'exit 143' TERM INT HUP                          # make signals run the EXIT trap
@@ -80,14 +80,17 @@ $body"
     >"$OUT" 2>"$OUTDIR/err" )
 rc=$?
 # agent steps are over: no leftover agent process may touch anything while root reads its output
+# agent-side git: patch comes back on stdout (root-opened file), no agent-writable path is ever written/read by root
 gitstep_ok=1
-( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent sh -c "git diff --cached --binary --no-renames > '$OUTDIR/patch'" ) >"$OUTDIR/gitlog" 2>&1 || gitstep_ok=0
+( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent git diff --cached --binary --no-renames ) \
+  >"$OUTDIR/patch" 2>"$OUTDIR/gitlog" || gitstep_ok=0
+# agent steps are over: no leftover agent process may touch anything while root reads its output
 kill_agent
-if [ "$gitstep_ok" -eq 0 ]; then { echo "--- agent git step failed:"; tail -n 20 "$OUTDIR/gitlog"; } >&2; log_and_exit "patch-step-failed"; fi
 
 [ "$rc" -eq 124 ] && log_and_exit "timeout"
 sub=$(jq -r '.subtype // "none"' "$OUT" 2>/dev/null || echo none)
 [ "$rc" -ne 0 ] || [ "$sub" != success ] && log_and_exit "failed:rc=$rc,subtype=$sub"
+if [ "$gitstep_ok" -eq 0 ]; then { echo "--- agent git step failed:"; tail -n 20 "$OUTDIR/gitlog"; } >&2; log_and_exit "patch-step-failed"; fi
 [ -s "$OUTDIR/patch" ] || log_and_exit "no-changes"
 
 # root side: patch is DATA. Apply to a fresh clone; no repo config/hook from the workspace is ever executed.
