@@ -12,12 +12,13 @@ flowchart TD
     B -- no --> X1[Refuse, stop]
     B -- yes --> C[factory.yml: run job<br/>concurrency=factory, 30 min cap]
     C --> D[scripts/factory-run.sh N]
-    D --> E[Agent run: claude -p<br/>no GH token, budget + timeout caps]
-    E --> F{Run ok and<br/>diff non-empty?}
+    D --> E[Agent run as uid 5000: claude -p<br/>scrubbed env, no GH token, budget + timeout caps]
+    E --> F{Run ok and<br/>patch non-empty?}
     F -- no --> X2[Comment on issue,<br/>remove label, log, exit 1]
-    F -- yes --> G{Diff touches<br/>protected paths?}
-    G -- yes --> X2
-    G -- no --> H[Wrapper commits as factory-bot,<br/>pushes agent/issue-N, opens PR]
+    F -- yes --> G[Root applies patch to a FRESH clone]
+    G --> G2{Patch applies and avoids<br/>protected paths?}
+    G2 -- no --> X2
+    G2 -- yes --> H[Wrapper commits as factory-bot,<br/>pushes agent/issue-N, opens PR]
     H --> I[verify.yml on PR:<br/>tests, semgrep, fresh-context review]
     I --> J{All green?}
     J -- yes --> K[Human review and merge]
@@ -30,7 +31,7 @@ flowchart TD
 | File | Role |
 |------|------|
 | `.github/workflows/factory.yml` | Trigger on `labeled`. `gate` job checks sender permission; `run` job calls the wrapper, then pushes the log. |
-| `scripts/factory-run.sh` | Wrapper. Branch, run the agent under caps, check diff, commit, push, open PR, write log line. Never retries. |
+| `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
 | `.github/workflows/verify.yml` | Independent judge on every PR to `main`. |
@@ -40,6 +41,15 @@ flowchart TD
 ## Who holds which power
 
 The agent can edit code and run tests. It cannot touch git remotes or GitHub. The wrapper does that.
+
+The CI step runs as root and holds `FACTORY_PAT`. The agent runs as a separate `agent` user:
+
+- **uid 5000, not the default 1001.** 1001 is the host runner user, which owns the runner's step control files (e.g. `GITHUB_ENV`). A colliding uid would let the agent plant env changes for later root steps. The step fails unless `agent` is uid 5000.
+- **Scrubbed env.** `env -i` with only `HOME`, `PATH` and `ANTHROPIC_API_KEY`. No GitHub token.
+- **Root-owned scripts.** `scripts/` is copied to `/opt/factory` (not group/world-writable) and run from there, so the agent cannot rewrite the wrapper. The log goes to `/opt/factory-out`.
+- **Patch is data.** Root never runs git inside the agent-writable workspace (a poisoned `.git/config` or hook would run with the token). The agent produces a patch; root applies it to a fresh clone with `core.hooksPath=/dev/null`.
+- **No symlink tricks.** Root's temp dir is root-only. Output files are opened by root and the agent writes through inherited fds.
+- **Kill before read.** Leftover agent processes are killed before root reads anything.
 
 ```mermaid
 sequenceDiagram
@@ -52,12 +62,13 @@ sequenceDiagram
     H->>GH: add label agent-ready
     GH->>W: factory.yml (FACTORY_PAT, API key)
     W->>GH: gh issue view N
-    W->>W: git checkout -b agent/issue-N
-    W->>C: claude -p (GH_TOKEN unset, budget + timeout)
-    C->>C: edit code, add tests, run pytest
-    C-->>W: JSON result (cost, turns, subtype)
-    W->>W: guards: success? changes? protected paths?
-    W->>GH: commit, push, open PR "Closes #N"
+    W->>C: claude -p as uid 5000 (scrubbed env, budget + timeout)
+    C->>C: edit workspace, add tests, run pytest
+    C-->>W: JSON result + git diff as patch (via root-opened files)
+    W->>W: kill agent processes
+    W->>GH: fresh clone, git checkout -b agent/issue-N
+    W->>W: git apply patch, check protected paths, commit
+    W->>GH: push, open PR "Closes #N"
     GH->>V: pull_request event
     V-->>GH: tests, semgrep, review verdict
     H->>GH: review and merge
@@ -74,11 +85,12 @@ flowchart LR
     subgraph During
         D1[Budget cap: FACTORY_BUDGET_USD, default 2]
         D2[Wall-clock cap: FACTORY_TIMEOUT, default 900s]
-        D3[Agent has no GH token]
+        D3[Agent: uid 5000, scrubbed env, no GH token]
         D4[settings.json denies push, gh, protected edits]
+        D5[Root-owned script copy]
     end
     subgraph After
-        A1[Protected-path diff check:<br/>.github/ scripts/ .claude/ CLAUDE.md]
+        A1[Patch applied to fresh clone,<br/>protected-path check:<br/>.github/ scripts/ .claude/ CLAUDE.md]
         A2[verify.yml: pytest cov ≥ 70, semgrep, LLM diff review]
         A3[Human merge]
     end
@@ -99,10 +111,12 @@ Every run appends one JSON line to `factory-runs.jsonl`:
 |----------|---------|
 | `ok` | PR opened |
 | `issue-fetch-failed` | `gh issue view` failed |
-| `branch-exists` | `agent/issue-N` already exists |
 | `timeout` | Hit `FACTORY_TIMEOUT` |
 | `failed:rc=…,subtype=…` | Agent errored or hit budget |
+| `patch-step-failed` | Agent-side `git add`/`diff` failed |
 | `no-changes` | Agent produced no diff |
+| `clone-failed` / `branch-failed` | Fresh clone or branch creation failed |
+| `patch-failed` | Patch did not apply to the fresh clone |
 | `touched-protected-paths` | Diff edits `.github/`, `scripts/`, `.claude/` or `CLAUDE.md` |
 | `commit-failed` / `push-failed` / `pr-failed` | Git or `gh` step failed |
 
@@ -112,11 +126,12 @@ Any non-`ok` status: wrapper comments on the issue, removes `agent-ready`, exits
 
 | Env var | Default | Where set |
 |---------|---------|-----------|
-| `FACTORY_BUDGET_USD` | `2` | `factory.yml` |
-| `FACTORY_TIMEOUT` | `900` | `factory.yml` |
-| `FACTORY_LOG` | `factory-runs.jsonl` | wrapper |
+| `FACTORY_BUDGET_USD` | `2` | repo variable of the same name, else `2` (`factory.yml`) |
+| `FACTORY_TIMEOUT` | `900` | repo variable of the same name, else `900` (`factory.yml`) |
+| `FACTORY_AGENT_USER` | `agent` in CI, empty in tests | `factory.yml` (empty = run agent as same user) |
+| `FACTORY_LOG` | `factory-runs.jsonl` | wrapper; CI sets `/opt/factory-out/factory-runs.jsonl` |
 | `CLAUDE_BIN` | `claude` | wrapper (tests override) |
-| `FACTORY_DRY` | unset | tests: skip `gh` and push |
+| `FACTORY_DRY` | unset | tests: skip `gh` and push; clone from `FACTORY_CLONE_URL` |
 
 Secrets: `FACTORY_PAT` (bot PAT: push, PR, comment), `ANTHROPIC_API_KEY`.
 
