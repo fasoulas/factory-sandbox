@@ -8,6 +8,8 @@ check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 run_case() {  # $1=name  $2=fake claude body  $3=timeout secs  $4=expected status prefix
   local d; d=$(mktemp -d)
   git -C "$d" init -q -b main && git -C "$d" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  # match the real repo: .factory-running is gitignored (GITIGNORE=0 tests a repo without it)
+  [ "${GITIGNORE:-1}" = 1 ] && { printf '.factory-running\n' > "$d/.gitignore"; git -C "$d" add .gitignore; git -C "$d" -c user.name=t -c user.email=t@t commit -q -m ignore; }
   printf '#!/usr/bin/env bash\n%s\n' "$2" > "$d/fakeclaude"; chmod +x "$d/fakeclaude"
   ( cd "$d" && FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}' CLAUDE_BIN="$d/fakeclaude" \
       FACTORY_CLONE_URL="$d" FACTORY_TIMEOUT="$3" FACTORY_LOG="$d/log.jsonl" "$here/scripts/factory-run.sh" 7 >/dev/null 2>&1 )
@@ -17,6 +19,7 @@ run_case() {  # $1=name  $2=fake claude body  $3=timeout secs  $4=expected statu
 }
 
 run_case success 'echo hi > out.txt; echo "{\"subtype\":\"success\",\"total_cost_usd\":0.01,\"num_turns\":2}"' 10 ok
+GITIGNORE=0 run_case success-no-gitignore 'echo hi > out.txt; echo "{\"subtype\":\"success\",\"total_cost_usd\":0.01,\"num_turns\":2}"' 10 ok
 run_case failure 'echo "{\"subtype\":\"error_max_budget_usd\"}"; exit 1' 10 failed
 run_case timeout 'sleep 30' 1 timeout
 # failure output must reach stderr (job log): fake claude writes to stderr and fails
