@@ -7,7 +7,8 @@
 # with the token). It applies the patch to a FRESH clone instead. Never retries.
 # Env: GH_TOKEN, ANTHROPIC_API_KEY, GITHUB_REPOSITORY, FACTORY_AGENT_USER (CI: agent; empty = same user, tests),
 #      FACTORY_BUDGET_USD (2), FACTORY_TIMEOUT secs (900), FACTORY_LOG, CLAUDE_BIN,
-#      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; FACTORY_CLONE_URL overrides the clone source)
+#      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; FACTORY_CLONE_URL overrides the clone source),
+#      FACTORY_PATCH_OUT=path (copy the agent's patch there, root-chosen path; used by tests)
 set -uo pipefail
 
 N=${1:?usage: factory-run.sh <issue-number>}
@@ -45,6 +46,13 @@ ghauth() {  # git with the bot token, for root-side fresh-clone operations only
   git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" "$@"
 }
 
+# Everything the agent can influence (stderr, result text, git output) is printed through here, so it cannot inject
+# Actions workflow commands (::error::, ::add-mask::, ...) into the job log: they are inert between stop-commands tokens.
+untrusted() {  # $1=label; text on stdin
+  local tok; tok=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+  echo "::stop-commands::$tok"; echo "--- $1"; cat; echo; echo "::$tok::"   # echo first: text may lack a trailing newline (head -c cuts mid-line)
+}
+
 log_and_exit() {  # $1=status  $2=pr url (may be empty)
   local status=$1 pr=${2:-} cost turns
   cost=$(jq -r '.total_cost_usd // 0' "$OUT" 2>/dev/null || echo 0)
@@ -55,8 +63,8 @@ log_and_exit() {  # $1=status  $2=pr url (may be empty)
     '{issue:$issue,duration_s:$duration_s,turns:$turns,cost_usd:$cost_usd,status:$status,pr:$pr}' >> "$LOG"
   if [ "$status" != ok ]; then
     # surface why in the job log (issue text is public already; Actions masks secrets)
-    { echo "--- claude stderr (tail)"; tail -n 20 "$OUTDIR/err" 2>/dev/null
-      echo "--- claude result"; jq -r '.result // empty' "$OUT" 2>/dev/null | head -c 800; } >&2
+    { tail -n 20 "$OUTDIR/err" 2>/dev/null | untrusted "claude stderr (tail)"
+      jq -r '.result // empty' "$OUT" 2>/dev/null | head -c 800 | untrusted "claude result"; } >&2
     ghx issue comment "$N" --body "factory run stopped: \`$status\`. No retry. Fix the issue or rerun by re-adding the label." || true
     ghx issue edit "$N" --remove-label agent-ready || true
     exit 1
@@ -79,11 +87,11 @@ $body"
     --max-budget-usd "$BUDGET" --output-format json --dangerously-skip-permissions \
     >"$OUT" 2>"$OUTDIR/err" )
 rc=$?
-# agent steps are over: no leftover agent process may touch anything while root reads its output
 # agent-side git: patch comes back on stdout (root-opened file), no agent-writable path is ever written/read by root
 gitstep_ok=1
-# lock file: never in the patch. NOT a ':!' pathspec: naming a gitignored path makes `git add` exit non-zero (runs 43107136642, 43108374953)
-( cd "$WS" && as_agent git add -A && as_agent git rm -q --cached --ignore-unmatch -- .factory-running \
+# lock file: never in the patch. NOT a ':!' pathspec: naming a gitignored path makes `git add` exit non-zero (runs 43107136642, 43108374953).
+# `git reset -- path` (not `git rm --cached`): unstages our addition but keeps a lock file that is tracked in HEAD from being deleted by the PR.
+( cd "$WS" && as_agent git add -A && as_agent git reset -q -- .factory-running \
   && as_agent git diff --cached --binary --no-renames ) \
   >"$OUTDIR/patch" 2>"$OUTDIR/gitlog" || gitstep_ok=0
 # agent steps are over: no leftover agent process may touch anything while root reads its output
@@ -92,7 +100,8 @@ kill_agent
 [ "$rc" -eq 124 ] && log_and_exit "timeout"
 sub=$(jq -r '.subtype // "none"' "$OUT" 2>/dev/null || echo none)
 [ "$rc" -ne 0 ] || [ "$sub" != success ] && log_and_exit "failed:rc=$rc,subtype=$sub"
-if [ "$gitstep_ok" -eq 0 ]; then { echo "--- agent git step failed:"; tail -n 20 "$OUTDIR/gitlog"; } >&2; log_and_exit "patch-step-failed"; fi
+if [ "$gitstep_ok" -eq 0 ]; then tail -n 20 "$OUTDIR/gitlog" | untrusted "agent git step failed" >&2; log_and_exit "patch-step-failed"; fi
+[ -n "${FACTORY_PATCH_OUT:-}" ] && cp "$OUTDIR/patch" "$FACTORY_PATCH_OUT"
 [ -s "$OUTDIR/patch" ] || log_and_exit "no-changes"
 
 # root side: patch is DATA. Apply to a fresh clone; no repo config/hook from the workspace is ever executed.

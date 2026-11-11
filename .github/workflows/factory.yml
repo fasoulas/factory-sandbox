@@ -37,16 +37,9 @@ jobs:
       - run: |
           apt-get update -qq && apt-get install -y -qq gh jq python3 python3-pip >/dev/null
           npm i -g @anthropic-ai/claude-code@2.1.322
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pip install -q --break-system-packages -r requirements-dev.txt
-      - name: factory run
-        env:
-          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          FACTORY_BUDGET_USD: ${{ vars.FACTORY_BUDGET_USD || '2' }}
-          FACTORY_TIMEOUT: ${{ vars.FACTORY_TIMEOUT || '900' }}
-        # Privilege split: this step runs as root and holds the PAT. The agent runs as `agent` (claude refuses
-        # --dangerously-skip-permissions as root) with a scrubbed env and can only edit the workspace.
+      - name: prepare (root-owned tooling, unprivileged agent user)
+        # No secrets in this step. The agent runs as `agent` (claude refuses --dangerously-skip-permissions as root).
         # Scripts run from a root-owned copy so the agent cannot rewrite them.
         run: |
           # uid 5000, NOT the default 1001: 1001 is the host runner user, which owns the mounted /__w/_temp, /__w/_actions
@@ -57,10 +50,20 @@ jobs:
           install -d -m 755 /opt/factory /opt/factory-out
           cp -r scripts /opt/factory/ && chmod -R go-w /opt/factory
           chown -R agent:agent "$GITHUB_WORKSPACE"
+      - name: factory run
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FACTORY_BUDGET_USD: ${{ vars.FACTORY_BUDGET_USD || '2' }}
+          FACTORY_TIMEOUT: ${{ vars.FACTORY_TIMEOUT || '900' }}
+        # Runs as root and holds the PAT; the wrapper hands the agent a scrubbed env and applies its patch itself.
+        run: |
           FACTORY_AGENT_USER=agent FACTORY_LOG=/opt/factory-out/factory-runs.jsonl \
             /opt/factory/scripts/factory-run.sh "${{ github.event.issue.number }}"
       - name: push run log
         if: always()
         env:
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-        run: FACTORY_LOG=/opt/factory-out/factory-runs.jsonl /opt/factory/scripts/push-log.sh
+        run: |
+          [ -x /opt/factory/scripts/push-log.sh ] || { echo "scripts were never installed, no log to push"; exit 0; }
+          FACTORY_LOG=/opt/factory-out/factory-runs.jsonl /opt/factory/scripts/push-log.sh
