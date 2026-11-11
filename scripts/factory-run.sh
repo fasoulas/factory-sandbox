@@ -3,8 +3,9 @@
 # One headless Claude run for one issue: patch from the agent, PR from root, log line, escalate on failure.
 # PRIVILEGE SPLIT: this script runs as root and is the only holder of GH_TOKEN. The agent runs as
 # FACTORY_AGENT_USER with a scrubbed env (ANTHROPIC_API_KEY only), writes a patch, and is killed.
-# Root never runs git inside the agent-writable workspace (poisoned .git/config or hooks would run
-# with the token). It applies the patch to a FRESH clone instead. Never retries.
+# Root never runs git OR gh inside the agent-writable workspace (poisoned .git/config or hooks would run
+# with the token; gh runs git in the cwd to find the repo). It applies the patch to a FRESH clone instead, runs from a
+# root-owned temp dir, and tells gh the repo via GH_REPO. Never retries.
 # Env: GH_TOKEN, ANTHROPIC_API_KEY, GITHUB_REPOSITORY, FACTORY_AGENT_USER (CI: agent; empty = same user, tests),
 #      FACTORY_BUDGET_USD (2), FACTORY_TIMEOUT secs (900), FACTORY_LOG, CLAUDE_BIN,
 #      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; FACTORY_CLONE_URL overrides the clone source),
@@ -22,9 +23,15 @@ LOG=${FACTORY_LOG:-$WS/factory-runs.jsonl}   # absolute: we cd into a throwaway 
 AGENT_HOME=${AGENT_USER:+$(getent passwd "$AGENT_USER" | cut -d: -f6)}
 CLONE_URL=${FACTORY_CLONE_URL:-https://github.com/${GITHUB_REPOSITORY:-}.git}
 LOCK=$WS/.factory-running
-OUTDIR=$(mktemp -d); WORK=$(mktemp -d)
+OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/factory-out.XXXXXX"); WORK=$(mktemp -d "${TMPDIR:-/tmp}/factory-work.XXXXXX")   # explicit template: BSD mktemp ignores TMPDIR without one
 OUT=$OUTDIR/out.json
 start=$(date +%s)
+# Leave the agent-writable workspace for good: every root-side gh/git call runs from a root-owned dir.
+# (Removing root's safe.directory entry made `gh issue view` fail with "dubious ownership": gh runs git in the cwd.)
+cd "$WORK" || exit 1
+# git walks UP to find a repo, and the agent can write /tmp: never look above our own temp dir (no planted /tmp/.git)
+export GIT_CEILING_DIRECTORIES=$(dirname "$WORK")
+[ -n "${GITHUB_REPOSITORY:-}" ] && export GH_REPO=$GITHUB_REPOSITORY
 
 # OUTDIR stays root-owned and root-only: the agent never gets a path there, so it cannot plant a symlink
 # that root would follow. Root opens every output file; the agent writes through inherited fds.
