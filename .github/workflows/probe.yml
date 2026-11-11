@@ -1,0 +1,30 @@
+name: probe
+# Throwaway: what can the unprivileged `agent` user reach inside the factory container? Do not merge.
+on:
+  pull_request:
+    paths: ['.github/workflows/probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          id -u agent >/dev/null 2>&1 || useradd -m agent
+          chown -R agent:agent "$GITHUB_WORKSPACE"
+          echo "== root / agent ids"; id; runuser -u agent -- id
+          echo "== mounts from the host (mountinfo)"; grep -E ' /__w| /__t| /__e|docker.sock' /proc/self/mountinfo | awk '{print $5}' | sort -u
+          echo "== owners"; ls -lnd /var/run/docker.sock /__w /__w/_temp /__w/_actions /__t /__e 2>&1
+          echo "== agent reach (r/w)"
+          runuser -u agent -- sh -c 'test -r /var/run/docker.sock && test -w /var/run/docker.sock && echo "docker.sock: ACCESSIBLE" || echo "docker.sock: no-access"'
+          for p in /__w /__w/_temp /__w/_actions /__t /__e; do
+            runuser -u agent -- sh -c "if touch '$p/.probe' 2>/dev/null; then echo '$p: WRITABLE'; rm -f '$p/.probe'; else echo '$p: not-writable'; fi"
+          done
+          echo "== agent can read root process env (/proc/1/environ)?"
+          runuser -u agent -- sh -c 'cat /proc/1/environ >/dev/null 2>&1 && echo READABLE || echo no-access'
+          echo "== agent scrubbed env"
+          runuser -u agent -- env -i HOME=/home/agent PATH="$PATH" ANTHROPIC_API_KEY=dummy env | sed 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=<dummy>/' | sort
