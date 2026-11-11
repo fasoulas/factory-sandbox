@@ -14,7 +14,7 @@ jobs:
         with:
           persist-credentials: false
       - run: |
-          id -u agent >/dev/null 2>&1 || useradd -m agent
+          id -u agent >/dev/null 2>&1 || useradd -m -u 5000 agent
           chown -R agent:agent "$GITHUB_WORKSPACE"
           echo "== root / agent ids"; id; runuser -u agent -- id
           echo "== mounts from the host (mountinfo)"; grep -E ' /__w| /__t| /__e|docker.sock' /proc/self/mountinfo | awk '{print $5}' | sort -u
@@ -24,6 +24,9 @@ jobs:
           for p in /__w /__w/_temp /__w/_actions /__t /__e; do
             runuser -u agent -- sh -c "if touch '$p/.probe' 2>/dev/null; then echo '$p: WRITABLE'; rm -f '$p/.probe'; else echo '$p: not-writable'; fi"
           done
+          echo "== runner step control files (GITHUB_ENV/PATH live here)"; ls -ln /__w/_temp/_runner_file_commands 2>&1 | head -6
+          runuser -u agent -- sh -c 'if touch /__w/_temp/_runner_file_commands/.probe 2>/dev/null; then echo "_runner_file_commands: WRITABLE"; rm -f /__w/_temp/_runner_file_commands/.probe; else echo "_runner_file_commands: not-writable"; fi'
+          runuser -u agent -- sh -c 'if touch "$GITHUB_WORKSPACE/.probe" 2>/dev/null; then echo "workspace: WRITABLE (intended)"; rm -f "$GITHUB_WORKSPACE/.probe"; else echo "workspace: not-writable"; fi'
           echo "== agent can read root process env (/proc/1/environ)?"
           runuser -u agent -- sh -c 'cat /proc/1/environ >/dev/null 2>&1 && echo READABLE || echo no-access'
           echo "== agent scrubbed env"
