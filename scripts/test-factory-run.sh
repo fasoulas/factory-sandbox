@@ -26,5 +26,12 @@ errout=$( cd "$d" && FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}'
 check "failure output: stderr tail shown" "grep -q BOOM-ERR <<<'$errout'"
 check "failure output: result shown" "grep -q BOOM-RESULT <<<'$errout'"
 rm -rf "$d"
+run_case gitstep 'rm -rf .git; echo "{\"subtype\":\"success\"}"' 10 patch-step-failed
+# a failed agent git step must show its output in the job log, not just a status
+d=$(mktemp -d); git -C "$d" init -q -b main && git -C "$d" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+printf '#!/usr/bin/env bash\nrm -rf .git; echo "{\\"subtype\\":\\"success\\"}"\n' > "$d/fakeclaude"; chmod +x "$d/fakeclaude"
+errout=$( cd "$d" && FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}' CLAUDE_BIN="$d/fakeclaude" FACTORY_CLONE_URL="$d" FACTORY_LOG="$d/log.jsonl" "$here/scripts/factory-run.sh" 7 2>&1 >/dev/null )
+check "git step failure: message + git error shown" "grep -q 'agent git step failed' <<<'$errout' && grep -qi 'not a git repository' <<<'$errout'"
+rm -rf "$d"
 run_case protected 'mkdir -p .github/workflows; echo x > .github/workflows/verify.yml; echo "{\"subtype\":\"success\"}"' 10 touched-protected-paths
 exit $fail
