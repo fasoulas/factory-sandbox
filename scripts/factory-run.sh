@@ -40,6 +40,9 @@ log_and_exit() {  # $1=status  $2=pr url (may be empty)
     --arg status "$status" --arg pr "$pr" \
     '{issue:$issue,duration_s:$duration_s,turns:$turns,cost_usd:$cost_usd,status:$status,pr:$pr}' >> "$LOG"
   if [ "$status" != ok ]; then
+    # surface why in the job log (issue text is public already; Actions masks secrets)
+    { echo "--- claude stderr (tail)"; tail -n 20 "$OUT.err" 2>/dev/null
+      echo "--- claude result"; jq -r '.result // empty' "$OUT" 2>/dev/null | head -c 800; } >&2
     ghx issue comment "$N" --body "factory run stopped: \`$status\`. No retry. Fix the issue or rerun by re-adding the label." || true
     ghx issue edit "$N" --remove-label agent-ready || true
     exit 1
