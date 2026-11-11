@@ -23,12 +23,14 @@ LOG=${FACTORY_LOG:-$WS/factory-runs.jsonl}   # absolute: we cd into a throwaway 
 AGENT_HOME=${AGENT_USER:+$(getent passwd "$AGENT_USER" | cut -d: -f6)}
 CLONE_URL=${FACTORY_CLONE_URL:-https://github.com/${GITHUB_REPOSITORY:-}.git}
 LOCK=$WS/.factory-running
-OUTDIR=$(mktemp -d); WORK=$(mktemp -d)
+OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/factory-out.XXXXXX"); WORK=$(mktemp -d "${TMPDIR:-/tmp}/factory-work.XXXXXX")   # explicit template: BSD mktemp ignores TMPDIR without one
 OUT=$OUTDIR/out.json
 start=$(date +%s)
 # Leave the agent-writable workspace for good: every root-side gh/git call runs from a root-owned dir.
 # (Removing root's safe.directory entry made `gh issue view` fail with "dubious ownership": gh runs git in the cwd.)
 cd "$WORK" || exit 1
+# git walks UP to find a repo, and the agent can write /tmp: never look above our own temp dir (no planted /tmp/.git)
+export GIT_CEILING_DIRECTORIES=$(dirname "$WORK")
 [ -n "${GITHUB_REPOSITORY:-}" ] && export GH_REPO=$GITHUB_REPOSITORY
 
 # OUTDIR stays root-owned and root-only: the agent never gets a path there, so it cannot plant a symlink

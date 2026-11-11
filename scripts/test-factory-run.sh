@@ -11,7 +11,8 @@ OK='echo "{\"subtype\":\"success\",\"total_cost_usd\":0.01,\"num_turns\":2}"'
 # run_case NAME FAKE_CLAUDE_BODY TIMEOUT_SECS EXPECTED_STATUS_PREFIX   (sets $B; caller inspects, then rm -rf "$B")
 # optional env: GITIGNORE=0 (repo without the lock ignore rule), PRE='shell run in repo before the first commit',
 #               CLONE_URL=override for the clone source, DRY= (empty: use the real gh/push paths),
-#               FAKE_GH=1 (fake gh first in PATH; logs "<cwd> :: <args>" to $B/gh.log)
+#               FAKE_GH=1 (fake gh first in PATH; logs "<physical cwd> :: <args> :: top=<git toplevel it can see>" to $B/gh.log),
+#               DECOY=1 (the wrapper's TMPDIR is itself a git repo, like an agent-planted /tmp/.git)
 run_case() {
   B=$(mktemp -d); local r=$B/repo; mkdir "$r"
   git -C "$r" init -q -b main
@@ -19,11 +20,11 @@ run_case() {
   [ -n "${PRE:-}" ] && ( cd "$r" && eval "$PRE" )
   git -C "$r" add -A && git -C "$r" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
   printf '#!/usr/bin/env bash\n%s\n' "$2" > "$B/fakeclaude"; chmod +x "$B/fakeclaude"
-  mkdir "$B/bin"
+  mkdir "$B/bin" "$B/tmp"; [ -n "${DECOY:-}" ] && git init -q "$B/tmp"
   if [ -n "${FAKE_GH:-}" ]; then
-    printf '#!/usr/bin/env bash\necho "$PWD :: $*" >> "%s/gh.log"\ncase "$1 $2" in\n  "issue view") echo %s ;;\n  "pr create") echo https://example.invalid/pr/1 ;;\nesac\nexit 0\n' "$B" "'{\"title\":\"t\",\"body\":\"b\"}'" > "$B/bin/gh"; chmod +x "$B/bin/gh"
+    printf '#!/usr/bin/env bash\necho "$(pwd -P) :: $* :: top=$(git rev-parse --show-toplevel 2>&1 | head -1)" >> "%s/gh.log"\ncase "$1 $2" in\n  "issue view") echo %s ;;\n  "pr create") echo https://example.invalid/pr/1 ;;\nesac\nexit 0\n' "$B" "'{\"title\":\"t\",\"body\":\"b\"}'" > "$B/bin/gh"; chmod +x "$B/bin/gh"
   fi
-  local envs=(PATH="$B/bin:$PATH" GH_TOKEN=x GITHUB_REPOSITORY=o/r CLAUDE_BIN="$B/fakeclaude" FACTORY_CLONE_URL="${CLONE_URL:-$r}"
+  local envs=(TMPDIR="$B/tmp" PATH="$B/bin:$PATH" GH_TOKEN=x GITHUB_REPOSITORY=o/r CLAUDE_BIN="$B/fakeclaude" FACTORY_CLONE_URL="${CLONE_URL:-$r}"
               FACTORY_TIMEOUT="$3" FACTORY_LOG="$B/log.jsonl" FACTORY_PATCH_OUT="$B/patch")
   [ "${DRY-1}" = 1 ] && envs+=(FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}')
   ( cd "$r" && env "${envs[@]}" "$here/scripts/factory-run.sh" 7 >"$B/stdout" 2>"$B/stderr" )
@@ -62,11 +63,14 @@ run_case stop-commands-nonl 'printf "::error::nonl" >&2; echo "{\"subtype\":\"er
 check "stop-commands-nonl: unterminated line wrapped, close token intact" "wrapped '$B/stderr' '^::error::nonl\$'"; rm -rf "$B"
 # root must never run gh (which runs git to find the repo) inside the agent-writable workspace. Fake gh logs its cwd.
 # Failure path: issue view (before the agent) + escalation comment/edit (after the agent). Success path: pr create.
-DRY= FAKE_GH=1 run_case gh-cwd-fail 'echo "{\"subtype\":\"error\"}"; exit 1' 10 failed
+DRY= FAKE_GH=1 DECOY=1 run_case gh-cwd-fail 'echo "{\"subtype\":\"error\"}"; exit 1' 10 failed
+rp=$(cd "$B/repo" && pwd -P); bp=$(cd "$B" && pwd -P)   # physical paths: /tmp or /var may be symlinks (macOS)
 check "gh-cwd-fail: gh called for view, comment, edit" "[ \"\$(wc -l < '$B/gh.log')\" -ge 3 ]"
-check "gh-cwd-fail: no gh call ran inside the workspace" "! grep -q '^$B/repo ::' '$B/gh.log'"; rm -rf "$B"
+check "gh-cwd-fail: no gh call ran inside the workspace" "! grep -q '^$rp ::' '$B/gh.log'"
+check "gh-cwd-fail: gh cannot see a planted parent repo (GIT_CEILING_DIRECTORIES)" "! grep -q 'top=$bp/tmp' '$B/gh.log'"; rm -rf "$B"
 DRY= FAKE_GH=1 run_case gh-cwd-ok "echo hi > out.txt; $OK" 10 ok
-check "gh-cwd-ok: gh pr create ran, not inside the workspace" "grep -q ':: pr create' '$B/gh.log' && ! grep -q '^$B/repo ::' '$B/gh.log'"; rm -rf "$B"
+rp=$(cd "$B/repo" && pwd -P)
+check "gh-cwd-ok: gh pr create ran, not inside the workspace" "grep -q ':: pr create' '$B/gh.log' && ! grep -q '^$rp ::' '$B/gh.log'"; rm -rf "$B"
 # patch does not apply to the clone source
 o=$(mktemp -d); git -C "$o" init -q -b main; echo different > "$o/a.txt"; git -C "$o" add -A; git -C "$o" -c user.name=t -c user.email=t@t commit -q -m other
 PRE='echo base > a.txt' CLONE_URL="$o" run_case patch-failed "echo changed > a.txt; $OK" 10 patch-failed; rm -rf "$B" "$o"
