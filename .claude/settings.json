@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "deny": ["Bash(git push:*)", "Bash(gh:*)", "Edit(.github/**)", "Edit(scripts/**)", "Edit(.claude/**)"]
+  }
+}

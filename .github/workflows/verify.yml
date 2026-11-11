@@ -1,0 +1,39 @@
+name: verify
+# Independent judge: separate job and fresh context from the agent run.
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements-dev.txt
+      - run: python -m pytest -q --cov=. --cov-fail-under=70
+  semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -q semgrep
+      - run: semgrep scan --config p/python --error --metrics=off .
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: npm i -g @anthropic-ai/claude-code@2.1.322
+      - name: fresh-context review of the diff
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          git diff origin/main...HEAD > /tmp/pr.diff
+          claude -p "Review /tmp/pr.diff for correctness bugs, security issues and missing tests. List findings briefly. The LAST line must be exactly 'VERDICT: PASS' or 'VERDICT: FAIL' (FAIL only for real defects)." \
+            --max-budget-usd 1 --allowedTools "Read,Grep,Glob" > /tmp/review.txt
+          cat /tmp/review.txt
+          tail -n1 /tmp/review.txt | grep -qx 'VERDICT: PASS'

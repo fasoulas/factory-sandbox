@@ -1,0 +1,53 @@
+name: factory
+on:
+  issues:
+    types: [labeled]
+permissions:
+  contents: read
+  issues: read
+jobs:
+  gate:
+    if: github.event.label.name == 'agent-ready'
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.perm.outputs.ok }}
+    steps:
+      - id: perm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          p=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
+          case "$p" in
+            admin|write|maintain) echo ok=true >> "$GITHUB_OUTPUT" ;;
+            *) echo "sender $SENDER has '$p', refusing"; echo ok=false >> "$GITHUB_OUTPUT" ;;
+          esac
+  run:
+    needs: gate
+    if: needs.gate.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency: factory
+    container: node:22-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - run: |
+          apt-get update -qq && apt-get install -y -qq gh jq python3 python3-pip >/dev/null
+          npm i -g @anthropic-ai/claude-code@2.1.322
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pip install -q --break-system-packages -r requirements-dev.txt
+      - name: factory run
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FACTORY_BUDGET_USD: "2"
+          FACTORY_TIMEOUT: "900"
+        run: scripts/factory-run.sh "${{ github.event.issue.number }}"
+      - name: push run log
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.FACTORY_PAT }}
+        run: scripts/push-log.sh
