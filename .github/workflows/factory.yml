@@ -45,7 +45,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FACTORY_BUDGET_USD: "2"
           FACTORY_TIMEOUT: "900"
-        run: scripts/factory-run.sh "${{ github.event.issue.number }}"
+        # claude refuses --dangerously-skip-permissions as root, so run as an unprivileged user (also a better sandbox)
+        run: |
+          id -u agent >/dev/null 2>&1 || useradd -m agent
+          chown -R agent:agent "$GITHUB_WORKSPACE"
+          runuser -u agent -- git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          runuser -u agent -- env "GH_TOKEN=$GH_TOKEN" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" \
+            "GITHUB_REPOSITORY=$GITHUB_REPOSITORY" "FACTORY_BUDGET_USD=$FACTORY_BUDGET_USD" \
+            "FACTORY_TIMEOUT=$FACTORY_TIMEOUT" "PATH=$PATH" scripts/factory-run.sh "${{ github.event.issue.number }}"
       - name: push run log
         if: always()
         env:
