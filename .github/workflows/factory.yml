@@ -45,16 +45,18 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FACTORY_BUDGET_USD: "2"
           FACTORY_TIMEOUT: "900"
-        # claude refuses --dangerously-skip-permissions as root, so run as an unprivileged user (also a better sandbox)
+        # Privilege split: this step runs as root and holds the PAT. The agent runs as `agent` (claude refuses
+        # --dangerously-skip-permissions as root) with a scrubbed env and can only edit the workspace.
+        # Scripts run from a root-owned copy so the agent cannot rewrite them.
         run: |
           id -u agent >/dev/null 2>&1 || useradd -m agent
+          install -d -m 755 /opt/factory /opt/factory-out
+          cp -r scripts /opt/factory/ && chmod -R go-w /opt/factory
           chown -R agent:agent "$GITHUB_WORKSPACE"
-          runuser -u agent -- git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          runuser -u agent -- env "GH_TOKEN=$GH_TOKEN" "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" \
-            "GITHUB_REPOSITORY=$GITHUB_REPOSITORY" "FACTORY_BUDGET_USD=$FACTORY_BUDGET_USD" \
-            "FACTORY_TIMEOUT=$FACTORY_TIMEOUT" "PATH=$PATH" scripts/factory-run.sh "${{ github.event.issue.number }}"
+          FACTORY_AGENT_USER=agent FACTORY_LOG=/opt/factory-out/factory-runs.jsonl \
+            /opt/factory/scripts/factory-run.sh "${{ github.event.issue.number }}"
       - name: push run log
         if: always()
         env:
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
-        run: scripts/push-log.sh
+        run: FACTORY_LOG=/opt/factory-out/factory-runs.jsonl /opt/factory/scripts/push-log.sh

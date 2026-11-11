@@ -1,34 +1,48 @@
 #!/usr/bin/env bash
 # Usage: scripts/factory-run.sh <issue-number>
-# One headless Claude run for one issue: branch, run under caps, PR, log line, escalate on failure.
-# Never retries. The agent runs WITHOUT the GitHub token; only this wrapper pushes/opens PRs.
-# Env: GH_TOKEN (bot PAT), ANTHROPIC_API_KEY, GITHUB_REPOSITORY,
+# One headless Claude run for one issue: patch from the agent, PR from root, log line, escalate on failure.
+# PRIVILEGE SPLIT: this script runs as root and is the only holder of GH_TOKEN. The agent runs as
+# FACTORY_AGENT_USER with a scrubbed env (ANTHROPIC_API_KEY only), writes a patch, and is killed.
+# Root never runs git inside the agent-writable workspace (poisoned .git/config or hooks would run
+# with the token). It applies the patch to a FRESH clone instead. Never retries.
+# Env: GH_TOKEN, ANTHROPIC_API_KEY, GITHUB_REPOSITORY, FACTORY_AGENT_USER (CI: agent; empty = same user, tests),
 #      FACTORY_BUDGET_USD (2), FACTORY_TIMEOUT secs (900), FACTORY_LOG, CLAUDE_BIN,
-#      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; used by tests)
+#      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; FACTORY_CLONE_URL overrides the clone source)
 set -uo pipefail
 
 N=${1:?usage: factory-run.sh <issue-number>}
 CLAUDE_BIN=${CLAUDE_BIN:-claude}
 BUDGET=${FACTORY_BUDGET_USD:-2}
 TMO=${FACTORY_TIMEOUT:-900}
-LOG=${FACTORY_LOG:-factory-runs.jsonl}
-LOCK=.factory-running
+AGENT_USER=${FACTORY_AGENT_USER:-}
 BRANCH=agent/issue-$N
-OUT=$(mktemp)
+WS=$PWD                                   # agent workspace (checkout), agent-writable
+LOG=${FACTORY_LOG:-$WS/factory-runs.jsonl}   # absolute: we cd into a throwaway clone later. CI sets it outside WS
+AGENT_HOME=${AGENT_USER:+$(getent passwd "$AGENT_USER" | cut -d: -f6)}
+CLONE_URL=${FACTORY_CLONE_URL:-https://github.com/${GITHUB_REPOSITORY:-}.git}
+LOCK=$WS/.factory-running
+OUTDIR=$(mktemp -d); WORK=$(mktemp -d)
+OUT=$OUTDIR/out.json
 start=$(date +%s)
 
+# agent must be able to write its output, nothing else of ours
+[ -n "$AGENT_USER" ] && chown "$AGENT_USER" "$OUTDIR"
 touch "$LOCK"
-trap 'rm -f "$LOCK" "$OUT" "$OUT.err"' EXIT   # lock must go on every exit path
-trap 'exit 143' TERM INT HUP                  # make signals run the EXIT trap
+trap 'rm -f "$LOCK"; rm -rf "$OUTDIR" "$WORK"' EXIT   # lock must go on every exit path
+trap 'exit 143' TERM INT HUP                          # make signals run the EXIT trap
 
 ghx() { if [ -n "${FACTORY_DRY:-}" ]; then echo "DRY gh $*" >&2; else gh "$@"; fi; }
 
-push_branch() {
-  [ -n "${FACTORY_DRY:-}" ] && { echo "DRY push $BRANCH" >&2; return 0; }
-  local auth
-  auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
-  git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-    push -q "https://github.com/$GITHUB_REPOSITORY.git" "$BRANCH"
+# run a command as the agent with a scrubbed env; no token, no inherited secrets
+as_agent() {
+  local envs=(env -i "HOME=${AGENT_HOME:-${HOME:-/tmp}}" "PATH=$PATH" "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}")
+  if [ -n "$AGENT_USER" ]; then runuser -u "$AGENT_USER" -- "${envs[@]}" "$@"; else "${envs[@]}" "$@"; fi
+}
+kill_agent() { [ -n "$AGENT_USER" ] && pkill -KILL -u "$AGENT_USER" 2>/dev/null; return 0; }
+
+ghauth() {  # git with the bot token, for root-side fresh-clone operations only
+  local auth; auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+  git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" "$@"
 }
 
 log_and_exit() {  # $1=status  $2=pr url (may be empty)
@@ -41,7 +55,7 @@ log_and_exit() {  # $1=status  $2=pr url (may be empty)
     '{issue:$issue,duration_s:$duration_s,turns:$turns,cost_usd:$cost_usd,status:$status,pr:$pr}' >> "$LOG"
   if [ "$status" != ok ]; then
     # surface why in the job log (issue text is public already; Actions masks secrets)
-    { echo "--- claude stderr (tail)"; tail -n 20 "$OUT.err" 2>/dev/null
+    { echo "--- claude stderr (tail)"; tail -n 20 "$OUTDIR/err" 2>/dev/null
       echo "--- claude result"; jq -r '.result // empty' "$OUT" 2>/dev/null | head -c 800; } >&2
     ghx issue comment "$N" --body "factory run stopped: \`$status\`. No retry. Fix the issue or rerun by re-adding the label." || true
     ghx issue edit "$N" --remove-label agent-ready || true
@@ -54,8 +68,6 @@ if [ -n "${FACTORY_ISSUE_JSON:-}" ]; then issue=$FACTORY_ISSUE_JSON
 else issue=$(gh issue view "$N" --json title,body) || log_and_exit "issue-fetch-failed"; fi
 title=$(jq -r .title <<<"$issue"); body=$(jq -r '.body // ""' <<<"$issue")
 
-git checkout -q -b "$BRANCH" || log_and_exit "branch-exists"
-
 prompt="Implement GitHub issue #$N in this repo. Follow CLAUDE.md. Smallest change that works; add or update tests and run them. Do not run git commit or push.
 
 Title: $title
@@ -63,26 +75,36 @@ Title: $title
 $body"
 
 # ponytail: dollars + wall clock only; --max-turns is not in claude 2.1.322
-env -u GH_TOKEN -u GITHUB_TOKEN timeout "$TMO" "$CLAUDE_BIN" -p "$prompt" \
-  --max-budget-usd "$BUDGET" --output-format json --dangerously-skip-permissions \
-  >"$OUT" 2>"$OUT.err"
+( cd "$WS" && as_agent timeout "$TMO" "$CLAUDE_BIN" -p "$prompt" \
+    --max-budget-usd "$BUDGET" --output-format json --dangerously-skip-permissions \
+    >"$OUT" 2>"$OUTDIR/err" )
 rc=$?
+# agent steps are over: no leftover agent process may touch anything while root reads its output
+( cd "$WS" && as_agent git add -A -- . ':!.factory-running' && as_agent sh -c "git diff --cached --binary --no-renames > '$OUTDIR/patch'" ) >/dev/null 2>&1
+kill_agent
 
 [ "$rc" -eq 124 ] && log_and_exit "timeout"
 sub=$(jq -r '.subtype // "none"' "$OUT" 2>/dev/null || echo none)
 [ "$rc" -ne 0 ] || [ "$sub" != success ] && log_and_exit "failed:rc=$rc,subtype=$sub"
+[ -s "$OUTDIR/patch" ] || log_and_exit "no-changes"
 
-git add -A
-git diff --cached --quiet && log_and_exit "no-changes"
+# root side: patch is DATA. Apply to a fresh clone; no repo config/hook from the workspace is ever executed.
+if [ -n "${FACTORY_DRY:-}" ]; then git clone -q "$CLONE_URL" "$WORK/c" || log_and_exit "clone-failed"
+else ghauth clone -q "$CLONE_URL" "$WORK/c" || log_and_exit "clone-failed"; fi
+cd "$WORK/c" || log_and_exit "clone-failed"
+git checkout -q -b "$BRANCH" || log_and_exit "branch-failed"
+git -c core.hooksPath=/dev/null apply --index "$OUTDIR/patch" || log_and_exit "patch-failed"
 # the agent must not be able to weaken its own judge (CI, wrapper, config)
-git diff --cached --name-only | grep -qE '^(\.github/|scripts/|\.claude/|CLAUDE\.md$)' && log_and_exit "touched-protected-paths"
-git -c user.name=factory-bot -c user.email=factory-bot@users.noreply.github.com \
+git diff --cached --name-only --no-renames | grep -qE '^(\.github/|scripts/|\.claude/|CLAUDE\.md$)' && log_and_exit "touched-protected-paths"
+git -c core.hooksPath=/dev/null -c user.name=factory-bot -c user.email=factory-bot@users.noreply.github.com \
   commit -q -m "agent: $title (#$N)" || log_and_exit "commit-failed"
-push_branch || log_and_exit "push-failed"
 
 if [ -n "${FACTORY_DRY:-}" ]; then pr="dry-run"
-else pr=$(gh pr create --head "$BRANCH" --base main --title "agent: $title" \
-  --body "Closes #$N
+else
+  ghauth push -q origin "$BRANCH" || log_and_exit "push-failed"
+  pr=$(gh pr create --head "$BRANCH" --base main --title "agent: $title" \
+    --body "Closes #$N
 
-Automated run. Human review required.") || log_and_exit "pr-failed"; fi
+Automated run. Human review required.") || log_and_exit "pr-failed"
+fi
 log_and_exit ok "$pr"
