@@ -9,7 +9,8 @@
 # Env: GH_TOKEN, ANTHROPIC_API_KEY, GITHUB_REPOSITORY, FACTORY_AGENT_USER (CI: agent; empty = same user, tests),
 #      FACTORY_BUDGET_USD (2), FACTORY_TIMEOUT secs (900), FACTORY_LOG, CLAUDE_BIN,
 #      FACTORY_DRY=1 (skip gh + push; FACTORY_ISSUE_JSON replaces the issue fetch; FACTORY_CLONE_URL overrides the clone source),
-#      FACTORY_PATCH_OUT=path (copy the agent's patch there, root-chosen path; used by tests)
+#      FACTORY_PATCH_OUT=ABSOLUTE path (copy the agent's patch there; root-chosen; used by tests; relative paths resolve
+#      against the temp dir, which is deleted on exit)
 set -uo pipefail
 
 N=${1:?usage: factory-run.sh <issue-number>}
@@ -23,21 +24,26 @@ LOG=${FACTORY_LOG:-$WS/factory-runs.jsonl}   # absolute: we cd into a throwaway 
 AGENT_HOME=${AGENT_USER:+$(getent passwd "$AGENT_USER" | cut -d: -f6)}
 CLONE_URL=${FACTORY_CLONE_URL:-https://github.com/${GITHUB_REPOSITORY:-}.git}
 LOCK=$WS/.factory-running
-OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/factory-out.XXXXXX"); WORK=$(mktemp -d "${TMPDIR:-/tmp}/factory-work.XXXXXX")   # explicit template: BSD mktemp ignores TMPDIR without one
+# explicit template: BSD mktemp ignores TMPDIR without one. A failed mktemp must ABORT: an empty WORK would make
+# `cd ""` a silent no-op and leave root inside the agent-writable workspace.
+OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/factory-out.XXXXXX") && [ -n "$OUTDIR" ] || { echo "factory-run: mktemp failed" >&2; exit 1; }
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/factory-work.XXXXXX") && [ -n "$WORK" ] || { echo "factory-run: mktemp failed" >&2; rm -rf "$OUTDIR"; exit 1; }
 OUT=$OUTDIR/out.json
 start=$(date +%s)
+trap 'rm -f "$LOCK"; rm -rf "$OUTDIR" "$WORK"' EXIT   # lock must go on every exit path (installed before the cd)
+trap 'exit 143' TERM INT HUP                          # make signals run the EXIT trap
 # Leave the agent-writable workspace for good: every root-side gh/git call runs from a root-owned dir.
 # (Removing root's safe.directory entry made `gh issue view` fail with "dubious ownership": gh runs git in the cwd.)
 cd "$WORK" || exit 1
 # git walks UP to find a repo, and the agent can write /tmp: never look above our own temp dir (no planted /tmp/.git)
 export GIT_CEILING_DIRECTORIES=$(dirname "$WORK")
+# real runs need the repo up front (gh no longer finds it from a git checkout); dry runs/tests don't call gh
+[ -n "${FACTORY_DRY:-}" ] || : "${GITHUB_REPOSITORY:?factory-run: GITHUB_REPOSITORY must be set}"
 [ -n "${GITHUB_REPOSITORY:-}" ] && export GH_REPO=$GITHUB_REPOSITORY
 
 # OUTDIR stays root-owned and root-only: the agent never gets a path there, so it cannot plant a symlink
 # that root would follow. Root opens every output file; the agent writes through inherited fds.
 touch "$LOCK"
-trap 'rm -f "$LOCK"; rm -rf "$OUTDIR" "$WORK"' EXIT   # lock must go on every exit path
-trap 'exit 143' TERM INT HUP                          # make signals run the EXIT trap
 
 ghx() { if [ -n "${FACTORY_DRY:-}" ]; then echo "DRY gh $*" >&2; else gh "$@"; fi; }
 

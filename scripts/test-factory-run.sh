@@ -71,6 +71,13 @@ check "gh-cwd-fail: gh cannot see a planted parent repo (GIT_CEILING_DIRECTORIES
 DRY= FAKE_GH=1 run_case gh-cwd-ok "echo hi > out.txt; $OK" 10 ok
 rp=$(cd "$B/repo" && pwd -P)
 check "gh-cwd-ok: gh pr create ran, not inside the workspace" "grep -q ':: pr create' '$B/gh.log' && ! grep -q '^$rp ::' '$B/gh.log'"; rm -rf "$B"
+# mktemp failure must abort BEFORE the agent runs (an empty WORK would make `cd ""` a no-op and leave root in the workspace)
+B=$(mktemp -d); mkdir "$B/repo"; git -C "$B/repo" init -q -b main
+printf '#!/usr/bin/env bash\ntouch "%s/ran"\n' "$B" > "$B/fakeclaude"; chmod +x "$B/fakeclaude"
+( cd "$B/repo" && env TMPDIR=/nonexistent/none FACTORY_DRY=1 FACTORY_ISSUE_JSON='{"title":"t","body":"b"}' CLAUDE_BIN="$B/fakeclaude" \
+    "$here/scripts/factory-run.sh" 7 >"$B/o" 2>"$B/e" ); rc=$?
+check "mktemp failure: aborts non-zero before running the agent" "[ $rc -ne 0 ] && [ ! -e '$B/ran' ] && grep -q 'mktemp failed' '$B/e'"
+check "mktemp failure: workspace untouched" "[ -z \"\$(ls -A '$B/repo' | grep -v '^.git\$')\" ] && [ ! -e '$B/repo/.factory-running' ]"; rm -rf "$B"
 # patch does not apply to the clone source
 o=$(mktemp -d); git -C "$o" init -q -b main; echo different > "$o/a.txt"; git -C "$o" add -A; git -C "$o" -c user.name=t -c user.email=t@t commit -q -m other
 PRE='echo base > a.txt' CLONE_URL="$o" run_case patch-failed "echo changed > a.txt; $OK" 10 patch-failed; rm -rf "$B" "$o"
