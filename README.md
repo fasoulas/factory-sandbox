@@ -12,7 +12,7 @@ The app itself is trivial (`app.py`: `add(a, b)`). The factory is the point.
 
 ```mermaid
 flowchart TD
-    A[Issue labeled agent-ready] --> B{Gate: sender has<br/>admin/write/maintain?}
+    A[Issue labeled agent-ready] --> B{Gate: labeler AND issue author<br/>have admin/write/maintain?}
     B -- no --> X1[Refuse, stop]
     B -- yes --> C[factory.yml: run job<br/>concurrency=factory, 30 min cap]
     C --> D[scripts/factory-run.sh N]
@@ -34,7 +34,7 @@ flowchart TD
 
 | File | Role |
 |------|------|
-| `.github/workflows/factory.yml` | Trigger on `labeled`. `gate` job checks sender permission; `run` job calls the wrapper, then pushes the log. |
+| `.github/workflows/factory.yml` | Trigger on `labeled`. `gate` job checks that both the labeler and the issue author have write access or better (the issue text becomes the agent's prompt); `run` job calls the wrapper, then pushes the log. |
 | `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
@@ -85,7 +85,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph Before
-        P1[Permission gate on label sender]
+        P1[Permission gate: labeler and issue author]
         P2[Single run at a time: concurrency=factory]
     end
     subgraph During
