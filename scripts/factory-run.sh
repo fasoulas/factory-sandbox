@@ -50,7 +50,7 @@ ghauth() {  # git with the bot token, for root-side fresh-clone operations only
 # Actions workflow commands (::error::, ::add-mask::, ...) into the job log: they are inert between stop-commands tokens.
 untrusted() {  # $1=label; text on stdin
   local tok; tok=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-  echo "::stop-commands::$tok"; echo "--- $1"; cat; echo "::$tok::"
+  echo "::stop-commands::$tok"; echo "--- $1"; cat; echo; echo "::$tok::"   # echo first: text may lack a trailing newline (head -c cuts mid-line)
 }
 
 log_and_exit() {  # $1=status  $2=pr url (may be empty)

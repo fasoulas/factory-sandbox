@@ -51,6 +51,9 @@ check "failure-output: stderr tail + result shown" "grep -q BOOM-ERR '$B/stderr'
 run_case stop-commands 'echo "::error::pwn" >&2; echo "{\"subtype\":\"error\",\"result\":\"::warning::pwn2\"}"; exit 1' 10 failed
 check "stop-commands: stderr line wrapped" "wrapped '$B/stderr' '^::error::pwn\$'"
 check "stop-commands: result line wrapped" "wrapped '$B/stderr' '^::warning::pwn2\$'"; rm -rf "$B"
+# text with NO trailing newline (what head -c produces): the closing token must still sit on its own line
+run_case stop-commands-nonl 'printf "::error::nonl" >&2; echo "{\"subtype\":\"error\"}"; exit 1' 10 failed
+check "stop-commands-nonl: unterminated line wrapped, close token intact" "wrapped '$B/stderr' '^::error::nonl\$'"; rm -rf "$B"
 # patch does not apply to the clone source
 o=$(mktemp -d); git -C "$o" init -q -b main; echo different > "$o/a.txt"; git -C "$o" add -A; git -C "$o" -c user.name=t -c user.email=t@t commit -q -m other
 PRE='echo base > a.txt' CLONE_URL="$o" run_case patch-failed "echo changed > a.txt; $OK" 10 patch-failed; rm -rf "$B" "$o"
