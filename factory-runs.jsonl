@@ -2,3 +2,4 @@
 {"issue":19,"duration_s":0,"turns":0,"cost_usd":0,"status":"issue-fetch-failed","pr":""}
 {"issue":19,"duration_s":16,"turns":4,"cost_usd":0.0759174,"status":"ok","pr":"https://github.com/fasoulas/factory-sandbox/pull/22"}
 {"issue":19,"duration_s":14,"turns":4,"cost_usd":0.0586542,"status":"push-failed","pr":""}
+{"issue":23,"duration_s":15,"turns":3,"cost_usd":0.0681498,"status":"ok","pr":"https://github.com/fasoulas/factory-sandbox/pull/24"}
