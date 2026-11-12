@@ -1,0 +1,21 @@
+{
+  "allowManagedHooksOnly": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "/opt/factory/hooks/env-guard.sh" },
+          { "type": "command", "command": "/opt/factory/hooks/spec-approval-guard.sh" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "/opt/factory/hooks/env-guard.sh" },
+          { "type": "command", "command": "/opt/factory/hooks/git-guard.sh" }
+        ]
+      }
+    ]
+  }
+}

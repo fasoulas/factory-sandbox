@@ -41,15 +41,7 @@ jobs:
       - name: prepare (root-owned tooling, unprivileged agent user)
         # No secrets in this step. The agent runs as `agent` (claude refuses --dangerously-skip-permissions as root).
         # Scripts run from a root-owned copy so the agent cannot rewrite them.
-        run: |
-          # uid 5000, NOT the default 1001: 1001 is the host runner user, which owns the mounted /__w/_temp, /__w/_actions
-          # (runner step control files, e.g. GITHUB_ENV). A colliding uid let the agent plant env changes for later root steps.
-          getent group agent >/dev/null || groupadd -g 5000 agent
-          id -u agent >/dev/null 2>&1 || useradd -m -u 5000 -g 5000 agent
-          [ "$(id -u agent)" = 5000 ] || { echo "agent must be uid 5000 (host runner is 1001)"; exit 1; }
-          install -d -m 755 /opt/factory /opt/factory-out
-          cp -r scripts /opt/factory/ && chmod -R go-w /opt/factory
-          chown -R agent:agent "$GITHUB_WORKSPACE"
+        run: scripts/install-runner.sh
       - name: factory run
         env:
           GH_TOKEN: ${{ secrets.FACTORY_PAT }}
