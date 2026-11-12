@@ -13,15 +13,22 @@ jobs:
       ok: ${{ steps.perm.outputs.ok }}
     steps:
       - id: perm
+        # The issue text becomes the agent's prompt, so BOTH the person who applied the label
+        # and the person who wrote the issue must have write access or better.
         env:
           GH_TOKEN: ${{ github.token }}
           SENDER: ${{ github.event.sender.login }}
+          AUTHOR: ${{ github.event.issue.user.login }}
         run: |
-          p=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
-          case "$p" in
-            admin|write|maintain) echo ok=true >> "$GITHUB_OUTPUT" ;;
-            *) echo "sender $SENDER has '$p', refusing"; echo ok=false >> "$GITHUB_OUTPUT" ;;
-          esac
+          ok=true
+          for u in "$SENDER" "$AUTHOR"; do
+            p=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$u/permission" --jq .permission) || p=unknown
+            case "$p" in
+              admin|write|maintain) ;;
+              *) echo "$u has '$p', refusing"; ok=false ;;
+            esac
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
   run:
     needs: gate
     if: needs.gate.outputs.ok == 'true'
