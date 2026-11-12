@@ -16,7 +16,7 @@ scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
 
 Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
 
-1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and `hooks/*.sh`. It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
+1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and the three guards from `hooks/` (plain copies in the target; the target gets no submodule). It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
 2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
 3. Pushes and opens a PR. Review it before merging.
 4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
@@ -72,7 +72,7 @@ flowchart TD
 | `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
 | `scripts/install-runner.sh` | Root-only runner setup, run by `factory.yml` before the agent exists. Creates `agent` (uid 5000), installs `scripts/`, `hooks/` and the managed settings root-owned, then fails the step if the agent can write any of them. |
-| `hooks/` | Copies of the claude-hooks guards: `env-guard.sh` (blocks `.env` and secrets), `git-guard.sh` (blocks destructive git), `spec-approval-guard.sh` (blocks edits until the spec is approved; no-op without `specs/`). See `hooks/README.md` for source commit and checksums. |
+| `hooks/` | Git submodule of [claude-hooks](https://github.com/fasoulas/claude-hooks) (bump with `git submodule update --remote hooks`, then PR the new pin). Only three guards are installed: `env-guard.sh` (blocks `.env` and secrets), `git-guard.sh` (blocks destructive git), `spec-approval-guard.sh` (blocks edits until the spec is approved; no-op without `specs/`). See `hooks/README.md` for source commit and checksums. |
 | `config/managed-settings.json` | Managed settings (highest-precedence tier), installed to `/etc/claude-code/`. Wires the guards as `PreToolUse` hooks and sets `allowManagedHooksOnly`, so project or user settings cannot add or disable hooks. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
 | `scripts/install.sh` | Installs the factory into another GitHub repo via PR (see [Install in another repo](#install-in-another-repo)). |

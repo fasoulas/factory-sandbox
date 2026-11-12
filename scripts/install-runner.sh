@@ -14,7 +14,8 @@ id -u agent >/dev/null 2>&1 || useradd -m -u 5000 -g 5000 agent
 # and the managed settings (highest-precedence settings tier; wires the hooks and forbids any other hook source).
 install -d -m 755 /opt/factory /opt/factory/hooks /opt/factory-out /etc/claude-code
 cp -r scripts /opt/factory/
-install -m 755 hooks/*.sh /opt/factory/hooks/
+# Only the three guards: hooks/ is the claude-hooks submodule and holds other (personal) hooks too.
+for f in env-guard.sh git-guard.sh spec-approval-guard.sh; do install -m 755 "hooks/$f" /opt/factory/hooks/; done
 install -m 644 config/managed-settings.json /etc/claude-code/managed-settings.json
 chmod -R go-w /opt/factory /etc/claude-code
 chown -R agent:agent "$WS"

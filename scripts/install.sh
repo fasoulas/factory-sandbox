@@ -9,6 +9,7 @@
 set -euo pipefail
 
 SRC=$(cd "$(dirname "$0")/.." && pwd)
+[ -f "$SRC/hooks/env-guard.sh" ] || { echo "hooks/ is empty: run git submodule update --init" >&2; exit 1; }
 repo=${1:?usage: install.sh OWNER/REPO [--test CMD] [-y]}; shift
 test_cmd="python -m pytest -q"; yes=
 while [ $# -gt 0 ]; do
@@ -36,7 +37,7 @@ else git checkout -q -B chore/add-factory; fi
 
 for f in .github/workflows/factory.yml .github/workflows/verify.yml \
          scripts/factory-run.sh scripts/push-log.sh scripts/install-runner.sh \
-         config/managed-settings.json $(cd "$SRC" && echo hooks/*.sh); do
+         config/managed-settings.json hooks/env-guard.sh hooks/git-guard.sh hooks/spec-approval-guard.sh; do
   mkdir -p "$(dirname "$f")"; cp "$SRC/$f" "$f"
 done
 chmod +x scripts/*.sh hooks/*.sh
