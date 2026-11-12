@@ -14,7 +14,7 @@ The app itself is trivial (`app.py`: `add(a, b)`). The factory is the point.
 scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
 ```
 
-Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
+Needs `gh` with admin on the target. Clone with `--recurse-submodules` (or run `git submodule update --init`), since `hooks/` is a submodule. Files are copied from the checkout you run it from, so use a commit you trust. It:
 
 1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and the three guards from `hooks/` (plain copies in the target; the target gets no submodule). It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
 2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
