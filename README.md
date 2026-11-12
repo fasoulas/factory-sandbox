@@ -15,7 +15,8 @@ flowchart TD
     A[Issue labeled agent-ready] --> B{Gate: labeler AND issue author<br/>have admin/write/maintain?}
     B -- no --> X1[Refuse, stop]
     B -- yes --> C[factory.yml: run job<br/>concurrency=factory, 30 min cap]
-    C --> D[scripts/factory-run.sh N]
+    C --> C2[install-runner.sh: agent user uid 5000,<br/>root-owned scripts, hooks, managed settings]
+    C2 --> D[scripts/factory-run.sh N]
     D --> E[Agent run as uid 5000: claude -p<br/>scrubbed env, no GH token, budget + timeout caps]
     E --> F{Run ok and<br/>patch non-empty?}
     F -- no --> X2[Comment on issue,<br/>remove label, log, exit 1]
@@ -37,10 +38,16 @@ flowchart TD
 | `.github/workflows/factory.yml` | Trigger on `labeled`. `gate` job checks that both the labeler and the issue author have write access or better (the issue text becomes the agent's prompt); `run` job calls the wrapper, then pushes the log. |
 | `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
+| `scripts/install-runner.sh` | Root-only runner setup, run by `factory.yml` before the agent exists. Creates `agent` (uid 5000), installs `scripts/`, `hooks/` and the managed settings root-owned, then fails the step if the agent can write any of them. |
+| `hooks/` | Copies of the claude-hooks guards: `env-guard.sh` (blocks `.env` and secrets), `git-guard.sh` (blocks destructive git), `spec-approval-guard.sh` (blocks edits until the spec is approved; no-op without `specs/`). See `hooks/README.md` for source commit and checksums. |
+| `config/managed-settings.json` | Managed settings (highest-precedence tier), installed to `/etc/claude-code/`. Wires the guards as `PreToolUse` hooks and sets `allowManagedHooksOnly`, so project or user settings cannot add or disable hooks. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
 | `scripts/install.sh` | Installs the factory into another GitHub repo via PR (see [Install in another repo](#install-in-another-repo)). |
 | `scripts/test-install.sh` | Installer test against a local bare repo with `gh` calls echoed: files land, test cmd substituted, re-run is a no-op. |
 | `.github/workflows/verify.yml` | Independent judge on every PR to `main`. |
+| `.github/workflows/hooks-integration.yml` | Runs real `claude` as the unprivileged agent under the real managed hooks (a few cents per run). Triggers only on changes to `hooks/`, `config/`, `tests/integration/` or `install-runner.sh`, or by hand. |
+| `tests/test_hooks.py`, `tests/hook_cases.jsonl` | Regression cases for the guards; run under normal pytest. |
+| `tests/integration/run.sh` | CI-only scenarios for `hooks-integration.yml`: the guards still block in bypass-permissions mode and the agent cannot switch them off. Needs `ANTHROPIC_API_KEY`, root and a Linux container. |
 | `CLAUDE.md` | Rules the agent follows. |
 | `.claude/settings.json` | Denies `git push`, `gh`, and edits to `.github/`, `scripts/`, `.claude/`. |
 
@@ -53,6 +60,7 @@ The CI step runs as root and holds `FACTORY_PAT`. The agent runs as a separate `
 - **uid 5000, not the default 1001.** 1001 is the host runner user, which owns the runner's step control files (e.g. `GITHUB_ENV`). A colliding uid would let the agent plant env changes for later root steps. The step fails unless `agent` is uid 5000.
 - **Scrubbed env.** `env -i` with only `HOME`, `PATH` and `ANTHROPIC_API_KEY`. No GitHub token.
 - **Root-owned scripts.** `scripts/` is copied to `/opt/factory` (not group/world-writable) and run from there, so the agent cannot rewrite the wrapper. The log goes to `/opt/factory-out`.
+- **Managed hooks.** `install-runner.sh` also installs the guards to `/opt/factory/hooks` and `config/managed-settings.json` to `/etc/claude-code/`. Managed settings outrank project and user settings and set `allowManagedHooksOnly`, so the agent cannot write its own settings to remove them. They block `.env` and secrets writes, destructive git, and spec-less edits. The step fails if the agent can write any of these paths.
 - **Patch is data.** Root never runs git inside the agent-writable workspace (a poisoned `.git/config` or hook would run with the token). The agent produces a patch; root applies it to a fresh clone with `core.hooksPath=/dev/null`.
 - **No symlink tricks.** Root's temp dir is root-only. Output files are opened by root and the agent writes through inherited fds.
 - **Kill before read.** Leftover agent processes are killed before root reads anything.
@@ -93,7 +101,8 @@ flowchart LR
         D2[Wall-clock cap: FACTORY_TIMEOUT, default 900s]
         D3[Agent: uid 5000, scrubbed env, no GH token]
         D4[settings.json denies push, gh, protected edits]
-        D5[Root-owned script copy]
+        D5[Root-owned scripts, hooks and managed settings]
+        D6[Managed hooks: env-guard, git-guard, spec-approval-guard]
     end
     subgraph After
         A1[Patch applied to fresh clone,<br/>protected-path check:<br/>.github/ scripts/ .claude/ CLAUDE.md]
@@ -149,7 +158,7 @@ scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
 
 Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
 
-1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`.
+1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and `hooks/*.sh`. It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
 2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
 3. Pushes and opens a PR. Review it before merging.
 4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
@@ -170,3 +179,5 @@ python -m pytest -q                 # app tests
 bash scripts/test-factory-run.sh    # wrapper tests (needs jq, git)
 bash scripts/test-install.sh        # installer tests (needs git)
 ```
+
+The guard tests (`tests/test_hooks.py`) run with the normal pytest command. `tests/integration/run.sh` does not: it runs in CI as root in a container with real `claude`, via `hooks-integration.yml`.
