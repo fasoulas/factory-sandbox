@@ -17,7 +17,7 @@ v=$(git -C "$d/origin.git" show chore/add-factory:.github/workflows/verify.yml 2
 check "factory files pushed"      "git -C '$d/origin.git' show chore/add-factory:scripts/factory-run.sh >/dev/null 2>&1"
 check "test cmd substituted"      "echo \"\$v\" | grep -q 'run: npm test'"
 check "CLAUDE.md has rules"       "git -C '$d/origin.git' show chore/add-factory:CLAUDE.md | grep -q 'npm test'"
-check "runner files pushed"       "for f in scripts/install-runner.sh hooks/git-guard.sh hooks/env-guard.sh config/managed-settings.json; do git -C '$d/origin.git' show chore/add-factory:\$f >/dev/null 2>&1 || exit 1; done"
+check "runner files pushed"       "for f in scripts/install-runner.sh hooks/git-guard.sh hooks/env-guard.sh hooks/spec-approval-guard.sh config/managed-settings.json; do git -C '$d/origin.git' show chore/add-factory:\$f >/dev/null 2>&1 || exit 1; done"
 check "dry run echoed label+PR"   "echo \"\$out\" | grep -q 'DRY gh label create agent-ready' && echo \"\$out\" | grep -q 'DRY gh pr create'"
 before=$(git -C "$d/origin.git" rev-parse chore/add-factory)
 out2=$(run)
