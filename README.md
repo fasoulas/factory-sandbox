@@ -8,6 +8,39 @@ Throwaway repo for testing the **issue-to-PR factory**: label a GitHub issue `ag
 
 The app itself is trivial (`app.py`: `add(a, b)`). The factory is the point.
 
+## Install in another repo
+
+```bash
+scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
+```
+
+Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
+
+1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and `hooks/*.sh`. It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
+2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
+3. Pushes and opens a PR. Review it before merging.
+4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
+5. Sets branch protection (PR plus `tests`, `semgrep`, `review`). Warns instead of failing if the plan or permissions refuse.
+
+Re-running continues the open branch and is a no-op when nothing changed.
+
+Limits:
+- `verify.yml` is Python-specific (setup-python, pip, semgrep `p/python`). `--test` swaps only the test command. Edit the other steps by hand for other stacks.
+- The real `gh` calls (clone, secrets, protection) are untested. Try it on a throwaway repo first.
+- Use a low-limit `ANTHROPIC_API_KEY` and a fine-grained `FACTORY_PAT` scoped to the one repo.
+
+## Local dev
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q                 # app tests
+bash scripts/test-factory-run.sh    # wrapper tests (needs jq, git)
+bash scripts/test-install.sh        # installer tests (needs git)
+```
+
+The guard tests (`tests/test_hooks.py`) run with the normal pytest command. `tests/integration/run.sh` does not: it runs in CI as root in a container with real `claude`, via `hooks-integration.yml`.
+
+
 ## Flow
 
 ```mermaid
@@ -150,34 +183,3 @@ Any non-`ok` status: wrapper comments on the issue, removes `agent-ready`, exits
 
 Secrets: `FACTORY_PAT` (bot PAT: push, PR, comment), `ANTHROPIC_API_KEY`.
 
-## Install in another repo
-
-```bash
-scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
-```
-
-Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
-
-1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and `hooks/*.sh`. It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
-2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
-3. Pushes and opens a PR. Review it before merging.
-4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
-5. Sets branch protection (PR plus `tests`, `semgrep`, `review`). Warns instead of failing if the plan or permissions refuse.
-
-Re-running continues the open branch and is a no-op when nothing changed.
-
-Limits:
-- `verify.yml` is Python-specific (setup-python, pip, semgrep `p/python`). `--test` swaps only the test command. Edit the other steps by hand for other stacks.
-- The real `gh` calls (clone, secrets, protection) are untested. Try it on a throwaway repo first.
-- Use a low-limit `ANTHROPIC_API_KEY` and a fine-grained `FACTORY_PAT` scoped to the one repo.
-
-## Local dev
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest -q                 # app tests
-bash scripts/test-factory-run.sh    # wrapper tests (needs jq, git)
-bash scripts/test-install.sh        # installer tests (needs git)
-```
-
-The guard tests (`tests/test_hooks.py`) run with the normal pytest command. `tests/integration/run.sh` does not: it runs in CI as root in a container with real `claude`, via `hooks-integration.yml`.
