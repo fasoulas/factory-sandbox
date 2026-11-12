@@ -26,3 +26,4 @@ for p in "${PATTERNS[@]}"; do
 done
 
 exit 0
+# sync test
