@@ -1,5 +1,7 @@
 # factory-sandbox
 
+Run the wrapper tests with scripts/test-factory-run.sh
+
 Throwaway repo for testing the **issue-to-PR factory**: label a GitHub issue `agent-ready`, a headless Claude run implements it, a bot opens a PR, an independent CI judge checks it, a human merges.
 
 The app itself is trivial (`app.py`: `add(a, b)`). The factory is the point.
