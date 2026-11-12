@@ -34,10 +34,12 @@ if git rev-parse -q --verify origin/chore/add-factory >/dev/null; then   # re-ru
   git checkout -q -B chore/add-factory origin/chore/add-factory
 else git checkout -q -B chore/add-factory; fi
 
-for f in .github/workflows/factory.yml .github/workflows/verify.yml scripts/factory-run.sh scripts/push-log.sh; do
+for f in .github/workflows/factory.yml .github/workflows/verify.yml \
+         scripts/factory-run.sh scripts/push-log.sh scripts/install-runner.sh \
+         config/managed-settings.json $(cd "$SRC" && echo hooks/*.sh); do
   mkdir -p "$(dirname "$f")"; cp "$SRC/$f" "$f"
 done
-chmod +x scripts/*.sh
+chmod +x scripts/*.sh hooks/*.sh
 
 if [ "$base" != main ]; then
   sed -i.bak -e "s/\[main\]/[$base]/" -e "s#origin/main#origin/$base#" .github/workflows/verify.yml
