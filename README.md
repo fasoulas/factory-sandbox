@@ -38,6 +38,8 @@ flowchart TD
 | `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
+| `scripts/install.sh` | Installs the factory into another GitHub repo via PR (see [Install in another repo](#install-in-another-repo)). |
+| `scripts/test-install.sh` | Installer test against a local bare repo with `gh` calls echoed: files land, test cmd substituted, re-run is a no-op. |
 | `.github/workflows/verify.yml` | Independent judge on every PR to `main`. |
 | `CLAUDE.md` | Rules the agent follows. |
 | `.claude/settings.json` | Denies `git push`, `gh`, and edits to `.github/`, `scripts/`, `.claude/`. |
@@ -139,10 +141,32 @@ Any non-`ok` status: wrapper comments on the issue, removes `agent-ready`, exits
 
 Secrets: `FACTORY_PAT` (bot PAT: push, PR, comment), `ANTHROPIC_API_KEY`.
 
+## Install in another repo
+
+```bash
+scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
+```
+
+Needs `gh` with admin on the target. Files are copied from the checkout you run it from, so use a commit you trust. It:
+
+1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`.
+2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
+3. Pushes and opens a PR. Review it before merging.
+4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
+5. Sets branch protection (PR plus `tests`, `semgrep`, `review`). Warns instead of failing if the plan or permissions refuse.
+
+Re-running continues the open branch and is a no-op when nothing changed.
+
+Limits:
+- `verify.yml` is Python-specific (setup-python, pip, semgrep `p/python`). `--test` swaps only the test command. Edit the other steps by hand for other stacks.
+- The real `gh` calls (clone, secrets, protection) are untested. Try it on a throwaway repo first.
+- Use a low-limit `ANTHROPIC_API_KEY` and a fine-grained `FACTORY_PAT` scoped to the one repo.
+
 ## Local dev
 
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q                 # app tests
 bash scripts/test-factory-run.sh    # wrapper tests (needs jq, git)
+bash scripts/test-install.sh        # installer tests (needs git)
 ```
