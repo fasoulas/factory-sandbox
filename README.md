@@ -17,10 +17,10 @@ scripts/install.sh OWNER/REPO [--test "npm test"] [-y]
 Needs `gh` with admin on the target. Clone with `--recurse-submodules` (or run `git submodule update --init`), since `hooks/` is a submodule. Files are copied from the checkout you run it from, so use a commit you trust. It:
 
 1. Clones the target, branches `chore/add-factory`, copies `factory.yml`, `verify.yml`, `factory-run.sh`, `push-log.sh`, `install-runner.sh`, `config/managed-settings.json` and the three guards from `hooks/` (plain copies in the target; the target gets no submodule). It does not copy `hooks-integration.yml`, which tests this repo's own hooks.
-2. Swaps in the default branch name and `--test` command, appends the agent rules to `CLAUDE.md` once.
-3. Pushes and opens a PR. Review it before merging.
+2. Swaps in the target's default branch name (instead of `main`) and the `--test` command, appends the agent rules to `CLAUDE.md` once.
+3. Force-pushes the branch and opens a PR. Review it before merging.
 4. Creates the `agent-ready` label, prompts for missing `ANTHROPIC_API_KEY` and `FACTORY_PAT`.
-5. Sets branch protection (PR plus `tests`, `semgrep`, `review`). Warns instead of failing if the plan or permissions refuse.
+5. Sets branch protection (PR with 0 required approvals, plus `tests`, `semgrep`, `review` checks; admins not enforced). Warns instead of failing if the plan or permissions refuse.
 
 Re-running continues the open branch and is a no-op when nothing changed.
 
@@ -72,14 +72,15 @@ flowchart TD
 | `scripts/factory-run.sh` | Wrapper, runs as root and is the only holder of the PAT. Runs the agent, takes its patch, applies it to a fresh clone, commits, pushes, opens PR, writes log line. Never retries. |
 | `scripts/push-log.sh` | Appends `factory-runs.jsonl` to the `agent-logs` branch. |
 | `scripts/install-runner.sh` | Root-only runner setup, run by `factory.yml` before the agent exists. Creates `agent` (uid 5000), installs `scripts/`, `hooks/` and the managed settings root-owned, then fails the step if the agent can write any of them. |
-| `hooks/` | Git submodule of [claude-hooks](https://github.com/fasoulas/claude-hooks) (bump with `git submodule update --remote hooks`, then PR the new pin). Only three guards are installed: `env-guard.sh` (blocks `.env` and secrets), `git-guard.sh` (blocks destructive git), `spec-approval-guard.sh` (blocks edits until the spec is approved; no-op without `specs/`). See `hooks/README.md` for source commit and checksums. |
+| `hooks/` | Git submodule of [claude-hooks](https://github.com/fasoulas/claude-hooks) (bump with `git submodule update --remote hooks`, then PR the new pin). Only three guards are installed: `env-guard.sh` (blocks `.env` and secrets), `git-guard.sh` (blocks destructive git), `spec-approval-guard.sh` (blocks edits until the spec is approved; no-op without `specs/`). See `hooks/README.md` for what each hook in the submodule does. |
 | `config/managed-settings.json` | Managed settings (highest-precedence tier), installed to `/etc/claude-code/`. Wires the guards as `PreToolUse` hooks and sets `allowManagedHooksOnly`, so project or user settings cannot add or disable hooks. |
 | `scripts/test-factory-run.sh` | Wrapper test with a fake `claude` (dry mode): lock cleanup, log line shape, timeout, protected paths. |
 | `scripts/install.sh` | Installs the factory into another GitHub repo via PR (see [Install in another repo](#install-in-another-repo)). |
 | `scripts/test-install.sh` | Installer test against a local bare repo with `gh` calls echoed: files land, test cmd substituted, re-run is a no-op. |
 | `.github/workflows/verify.yml` | Independent judge on every PR to `main`. |
-| `.github/workflows/hooks-integration.yml` | Runs real `claude` as the unprivileged agent under the real managed hooks (a few cents per run). Triggers only on changes to `hooks/`, `config/`, `tests/integration/` or `install-runner.sh`, or by hand. |
+| `.github/workflows/hooks-integration.yml` | Runs real `claude` as the unprivileged agent under the real managed hooks (a few cents per run). Triggers only on changes to `hooks/`, `config/`, `tests/integration/`, `scripts/install-runner.sh` or the workflow itself, or by hand. |
 | `tests/test_hooks.py`, `tests/hook_cases.jsonl` | Regression cases for the guards; run under normal pytest. |
+| `tests/test_app.py`, `tests/test_readme.py` | App test, and a check that this README keeps its app-test command line. |
 | `tests/integration/run.sh` | CI-only scenarios for `hooks-integration.yml`: the guards still block in bypass-permissions mode and the agent cannot switch them off. Needs `ANTHROPIC_API_KEY`, root and a Linux container. |
 | `CLAUDE.md` | Rules the agent follows. |
 | `.claude/settings.json` | Denies `git push`, `gh`, and edits to `.github/`, `scripts/`, `.claude/`. |
@@ -180,6 +181,9 @@ Any non-`ok` status: wrapper comments on the issue, removes `agent-ready`, exits
 | `FACTORY_LOG` | `factory-runs.jsonl` | wrapper; CI sets `/opt/factory-out/factory-runs.jsonl` |
 | `CLAUDE_BIN` | `claude` | wrapper (tests override) |
 | `FACTORY_DRY` | unset | tests: skip `gh` and push; clone from `FACTORY_CLONE_URL` |
+| `FACTORY_ISSUE_JSON` | unset | tests: JSON (`title`, `body`) used instead of `gh issue view` |
+| `FACTORY_PATCH_OUT` | unset | tests: path where the wrapper copies the agent's patch |
+| `FACTORY_LOGS_URL` | `https://github.com/$GITHUB_REPOSITORY.git` | `push-log.sh`; tests push to a local bare repo |
 
 Secrets: `FACTORY_PAT` (bot PAT: push, PR, comment), `ANTHROPIC_API_KEY`.
 
